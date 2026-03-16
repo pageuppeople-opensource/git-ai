@@ -1,0 +1,79 @@
+Cargo.toml
+  6af914198c881dfe 3,39
+src/commands/blame.rs
+  6af914198c881dfe 1,1345,1352-1353
+src/authorship/prompt_utils.rs
+  6af914198c881dfe 13
+src/lib.rs
+  6af914198c881dfe 1,3,13,15,17
+src/commands/git_handlers.rs
+  6af914198c881dfe 22,160,173,182,184,187-189,403,506
+src/commands/debug.rs
+  6af914198c881dfe 1,48,60,205-206,279
+src/commands/hooks/commit_hooks.rs
+  6af914198c881dfe 98
+src/authorship/internal_db.rs
+  6af914198c881dfe 290
+src/commands/show_prompt.rs
+  6af914198c881dfe 1,3,42-43,104
+tests/wrapper_performance_targets.rs
+  6af914198c881dfe 1-5
+README.md
+  6af914198c881dfe 1-125
+src/commands/checkpoint_agent/opencode_preset.rs
+  6af914198c881dfe 10
+src/commands/git_ai_handlers.rs
+  6af914198c881dfe 1,22,24,52,54,130,134,138,142,146,150,154,158,162,169,173,246-247,256,276-277,280,313-314,318,678,778,785,802,915,917-918,930,992,1490
+src/commands/install_hooks.rs
+  6af914198c881dfe 1,133-134,399,408
+tests/performance.rs
+  6af914198c881dfe 13,34
+src/authorship/post_commit.rs
+  6af914198c881dfe 1,87,163-164,194-195,201-207,245,501,567
+src/commands/hooks/fetch_hooks.rs
+  6af914198c881dfe 5,17,25
+tests/observability_flush.rs
+  6af914198c881dfe 1-15
+.github/workflows/release-pageup.yml
+  6af914198c881dfe 1-265
+tests/repos/test_repo.rs
+  6af914198c881dfe 9
+src/commands/checkpoint_agent/agent_presets.rs
+  6af914198c881dfe 7
+src/commands/checkpoint_agent/amp_preset.rs
+  6af914198c881dfe 10
+src/auth/mod.rs
+  6af914198c881dfe 9
+src/observability_shim.rs
+  6af914198c881dfe 1-66
+src/commands/hooks/push_hooks.rs
+  6af914198c881dfe 2,13,30,33,57,74,77
+src/auth/credentials.rs
+  6af914198c881dfe 1,9,11,33,55
+src/auth/credential_backend.rs
+  6af914198c881dfe 20,26,51
+src/commands/checkpoint.rs
+  6af914198c881dfe 5,47,52,94,114-116,437,455-456,458-460,464-465,481,484,486
+src/commands/mod.rs
+  6af914198c881dfe 9,11,13,15,22,24,26,31,33,39,41,43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.11",
+  "base_commit_sha": "b55dbbf8e202fac5d0d1fc78171d32eb67b326c4",
+  "prompts": {
+    "6af914198c881dfe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7d636930-ca24-46be-93d0-1e3c97067a6a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "P Karthikeyan <humblelistener>",
+      "messages": [],
+      "total_additions": 753,
+      "total_deletions": 204,
+      "accepted_lines": 624,
+      "overriden_lines": 0
+    }
+  }
+}
