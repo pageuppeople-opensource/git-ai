@@ -9,7 +9,7 @@ on:
 
 jobs:
   pr-smoke-nasty:
-    if: github.event_name == 'pull_request'
+    if: false # disabled on PageUp fork
     name: PR Smoke Nasty Benchmark
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -63,7 +63,7 @@ jobs:
           if-no-files-found: ignore
 
   nightly-full-benchmarks:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: false # disabled on PageUp fork
     name: Nightly Full Performance Benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 480

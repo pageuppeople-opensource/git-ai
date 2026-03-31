@@ -5,10 +5,15 @@ on:
     - cron: '0 6 * * *'   # Daily 06:00 UTC
   workflow_dispatch:
 
+# Note: SYNC_PAT (a PAT with repo + workflow scopes) is required because:
+#   1. GITHUB_TOKEN cannot push branches/commits that modify .github/workflows/ files
+#   2. Force-push to main requires a branch-protection bypass (configure in repo rulesets)
+# Without SYNC_PAT the workflow will detect changes but create an issue instead of pushing.
+
 permissions:
   contents: write
   pull-requests: write
-  workflows: write
+  issues: write
 
 jobs:
   sync:
@@ -21,6 +26,8 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          # Use PAT so pushes can include workflow-file changes
+          token: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Fetch upstream
         run: |
@@ -73,28 +80,36 @@ jobs:
             echo "result=conflict" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Force-push rebased main
+      - name: Push rebased main
         if: steps.rebase.outputs.result == 'success'
-        run: git push --force-with-lease origin main
+        id: push
+        run: |
+          if git push --force-with-lease origin main 2>&1; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Force-push failed — likely missing SYNC_PAT or branch-protection bypass."
+          fi
 
       - name: Create escalation PR on conflict
         if: steps.rebase.outputs.result == 'conflict'
+        id: escalation_pr
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="auto/upstream-sync-$(date +%Y%m%d)"
           git checkout -b "$BRANCH" upstream/main
-          git push -u origin "$BRANCH"
+
+          if ! git push -u origin "$BRANCH" 2>&1; then
+            echo "branch_pushed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not push escalation branch (SYNC_PAT may be missing)."
+            exit 0
+          fi
+          echo "branch_pushed=true" >> "$GITHUB_OUTPUT"
 
           SECURITY_NOTE=""
           if [ "${{ steps.commits.outputs.security_hits }}" != "0" ]; then
-            SECURITY_NOTE=$(cat <<'SECEOF'
-
-          ### Security-relevant changes detected
-
-          **${{ steps.commits.outputs.security_hits }}** commit(s) mention security keywords — review with priority.
-          SECEOF
-          )
+            SECURITY_NOTE=$(printf '\n### Security-relevant changes detected\n\n**%s** commit(s) mention security keywords — review with priority.' "${{ steps.commits.outputs.security_hits }}")
           fi
 
           gh pr create \
@@ -132,14 +147,96 @@ jobs:
           PREOF
           )"
 
+      - name: Create issue as fallback notification
+        if: |
+          (steps.push.outputs.pushed == 'false') ||
+          (steps.rebase.outputs.result == 'conflict' && steps.escalation_pr.outputs.branch_pushed == 'false')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ steps.rebase.outputs.result }}" = "success" ]; then
+            TITLE="chore: upstream sync — rebase succeeded but push failed"
+            BODY="$(cat <<ISSEOF
+          ## Upstream sync rebase succeeded but could not push
+
+          The rebase of **${{ steps.check.outputs.patch_count }}** PageUp patches on
+          **${{ steps.check.outputs.commit_count }}** new upstream commits succeeded,
+          but the force-push to \`main\` failed.
+
+          **Most likely cause:** missing \`SYNC_PAT\` secret or branch-protection bypass.
+
+          ### Setup required
+
+          1. Create a PAT with \`repo\` + \`workflow\` scopes
+          2. Add it as repo secret \`SYNC_PAT\`
+          3. Add a branch-protection bypass for the PAT owner (Settings → Rules → Rulesets)
+
+          ### Manual sync
+
+          \`\`\`bash
+          git fetch upstream main
+          git checkout main
+          git rebase upstream/main
+          git push --force-with-lease origin main
+          \`\`\`
+
+          ### Upstream commits
+
+          ${{ steps.commits.outputs.log }}
+
+          ---
+          *Created by [sync-upstream](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*
+          ISSEOF
+          )"
+          else
+            TITLE="chore: upstream sync conflict — manual rebase required"
+            BODY="$(cat <<ISSEOF
+          ## Upstream sync failed — rebase conflict
+
+          **${{ steps.check.outputs.commit_count }}** new upstream commits could not be rebased
+          under the **${{ steps.check.outputs.patch_count }}** PageUp patches.
+
+          Could not create a PR because pushing the escalation branch failed
+          (missing \`SYNC_PAT\` secret — the \`GITHUB_TOKEN\` cannot push workflow file changes).
+
+          ### How to resolve
+
+          \`\`\`bash
+          git fetch upstream main
+          git checkout main
+          git rebase upstream/main
+          # resolve conflicts, then:
+          git rebase --continue
+          git push --force-with-lease origin main
+          \`\`\`
+
+          ### Upstream commits
+
+          ${{ steps.commits.outputs.log }}
+
+          ---
+          *Created by [sync-upstream](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*
+          ISSEOF
+          )"
+          fi
+
+          gh issue create \
+            --assignee humblelistener \
+            --label upstream-sync \
+            --title "$TITLE" \
+            --body "$BODY"
+
       - name: Job summary
         if: always() && steps.check.outputs.up_to_date == 'false'
         run: |
           R="${{ steps.rebase.outputs.result }}"
-          if [ "$R" = "success" ]; then
+          P="${{ steps.push.outputs.pushed }}"
+          if [ "$R" = "success" ] && [ "$P" = "true" ]; then
             echo "### Rebased ${{ steps.check.outputs.patch_count }} PageUp patches on ${{ steps.check.outputs.commit_count }} new upstream commits" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$R" = "success" ] && [ "$P" = "false" ]; then
+            echo "### Rebase succeeded but push failed — issue created" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$R" = "conflict" ]; then
-            echo "### Rebase conflict — escalation PR created" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Rebase conflict — escalation PR/issue created" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ steps.commits.outputs.security_hits }}" != "0" ]; then
             echo "**${{ steps.commits.outputs.security_hits }} security-relevant commit(s)**" >> "$GITHUB_STEP_SUMMARY"
