@@ -149,13 +149,9 @@ pub enum TelemetryEnvelope {
         context: Option<Value>,
     },
     #[cfg(feature = "cloud")]
-    Metrics {
-        events: Vec<MetricEvent>,
-    },
+    Metrics { events: Vec<MetricEvent> },
     #[cfg(not(feature = "cloud"))]
-    Metrics {
-        events: Vec<Value>,
-    },
+    Metrics { events: Vec<Value> },
 }
 
 /// A CAS object payload sent from client to daemon for background upload.

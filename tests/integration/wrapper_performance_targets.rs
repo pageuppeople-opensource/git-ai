@@ -4,7 +4,7 @@
 //! compiled when the `cloud` feature is enabled.
 
 use git_ai::authorship::working_log::CheckpointKind;
-use git_ai::observability::wrapper_performance_targets::{
+use git_ai::observability_shim::{
     BenchmarkResult, PERFORMANCE_FLOOR_MS, log_performance_for_checkpoint,
     log_performance_target_if_violated,
 };

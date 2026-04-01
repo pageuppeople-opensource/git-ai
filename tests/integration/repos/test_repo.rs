@@ -11,7 +11,7 @@ use git_ai::feature_flags::FeatureFlags;
 use git_ai::git::cli_parser::{ParsedGitInvocation, extract_clone_target_directory};
 use git_ai::git::repo_storage::PersistedWorkingLog;
 use git_ai::git::repository as GitAiRepository;
-use git_ai::observability::wrapper_performance_targets::BenchmarkResult;
+use git_ai::observability_shim::BenchmarkResult;
 use insta::{Settings, assert_debug_snapshot};
 use rand::Rng;
 use std::cell::Cell;

@@ -51,6 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_prompts_start_time ON prompts(start_time);
 "#;
 
 /// Prompt whose messages need CAS resolution before writing to prompts.db
+#[cfg_attr(not(feature = "cloud"), allow(dead_code))]
 struct DeferredPrompt {
     id: String,
     tool: String,
@@ -245,7 +246,7 @@ fn handle_populate(args: &[String]) {
 
     // 2. Fetch from git notes (scans all repos found in internal DB when --all-repositories)
     eprintln!("  git notes:");
-    let deferred_prompts = match fetch_from_git_notes(
+    let _deferred_prompts = match fetch_from_git_notes(
         &conn,
         since_timestamp,
         author_filter.as_deref(),
@@ -267,8 +268,8 @@ fn handle_populate(args: &[String]) {
 
     // 3. Fetch CAS messages, then write resolved prompts to DB
     #[cfg(feature = "cloud")]
-    if !deferred_prompts.is_empty() {
-        resolve_cas_messages(&conn, &deferred_prompts);
+    if !_deferred_prompts.is_empty() {
+        resolve_cas_messages(&conn, &_deferred_prompts);
     }
 
     // Report actual row count, not seen_ids (which includes prompts skipped for missing messages)
