@@ -10,7 +10,7 @@ use crate::git::repo_state::{
     common_dir_for_repo_path, common_dir_for_worktree, git_dir_for_worktree,
     read_ref_oid_for_common_dir, worktree_root_for_path,
 };
-use crate::observability;
+use crate::observability_shim as observability;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;

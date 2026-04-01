@@ -1,5 +1,6 @@
 use crate::commands::checkpoint_agent::agent_presets::AgentRunResult;
 use crate::daemon::domain::RepoContext;
+#[cfg(feature = "cloud")]
 use crate::metrics::MetricEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -147,9 +148,10 @@ pub enum TelemetryEnvelope {
         #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<Value>,
     },
-    Metrics {
-        events: Vec<MetricEvent>,
-    },
+    #[cfg(feature = "cloud")]
+    Metrics { events: Vec<MetricEvent> },
+    #[cfg(not(feature = "cloud"))]
+    Metrics { events: Vec<Value> },
 }
 
 /// A CAS object payload sent from client to daemon for background upload.

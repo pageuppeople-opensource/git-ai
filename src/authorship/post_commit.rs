@@ -156,7 +156,7 @@ pub fn post_commit_with_final_state(
 
     // Long-lived daemon processes should read a fresh config snapshot.
     // Wrapper/hooks mode can use the process-global cached config.
-    let (effective_storage, using_custom_api, custom_attrs) =
+    let (effective_storage, _using_custom_api, custom_attrs) =
         if crate::daemon::daemon_process_active() {
             let config = Config::fresh();
             (
@@ -201,7 +201,7 @@ pub fn post_commit_with_final_state(
                 let context = ApiContext::new(None);
                 let client = ApiClient::new(context);
                 let should_enqueue_cas =
-                    client.is_logged_in() || client.has_api_key() || using_custom_api;
+                    client.is_logged_in() || client.has_api_key() || _using_custom_api;
 
                 if should_enqueue_cas {
                     // Redact secrets before uploading to CAS
