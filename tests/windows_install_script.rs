@@ -1,4 +1,5 @@
 #![cfg(windows)]
+#![allow(dead_code)]
 
 #[macro_use]
 #[path = "integration/repos/mod.rs"]
@@ -392,6 +393,7 @@ fn windows_daemon_creates_log_file() {
 
 #[test]
 #[serial]
+#[cfg(feature = "cloud")]
 fn windows_git_extension_upgrade_requires_direct_git_ai_binary() {
     let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
 
