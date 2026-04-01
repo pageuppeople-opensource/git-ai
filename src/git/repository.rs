@@ -1253,7 +1253,7 @@ impl Repository {
                 "rewrite_authorship_if_needed failed for {:?}: {}",
                 rewrite_log_event, error
             ));
-            crate::observability::log_error(
+            crate::observability_shim::log_error(
                 &error,
                 Some(serde_json::json!({
                     "component": "repository",

@@ -187,6 +187,7 @@ fn handle_run(args: &[String]) -> Result<(), String> {
 
     // Daemon is fully dead (lock released, sockets removed, threads joined).
     // Now safe to self-update — install.sh can start a fresh daemon.
+    #[cfg(feature = "cloud")]
     crate::daemon::daemon_run_pending_self_update();
 
     Ok(())

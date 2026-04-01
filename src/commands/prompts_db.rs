@@ -266,6 +266,7 @@ fn handle_populate(args: &[String]) {
     };
 
     // 3. Fetch CAS messages, then write resolved prompts to DB
+    #[cfg(feature = "cloud")]
     if !deferred_prompts.is_empty() {
         resolve_cas_messages(&conn, &deferred_prompts);
     }
@@ -940,6 +941,7 @@ fn fetch_from_git_notes(
 /// Checks cas_cache first, then batch-fetches from CAS API (chunks of 100).
 /// Silently skips any prompts where resolution fails (auth, 404, network errors).
 /// Only makes API calls if the user is logged in; cache lookups work regardless.
+#[cfg(feature = "cloud")]
 fn resolve_cas_messages(conn: &Connection, deferred: &[DeferredPrompt]) {
     use crate::api::client::{ApiClient, ApiContext};
     use crate::api::types::CasMessagesObject;

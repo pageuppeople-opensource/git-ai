@@ -21,7 +21,7 @@ use crate::git::rewrite_log::{
     RebaseCompleteEvent, ResetEvent, ResetKind, RewriteLogEvent, StashEvent, StashOperation,
 };
 use crate::git::sync_authorship::{fetch_authorship_notes, fetch_remote_from_args};
-use crate::observability;
+use crate::observability_shim as observability;
 use crate::utils::{LockFile, debug_log};
 use crate::{
     authorship::post_commit::post_commit_with_final_state,
@@ -73,6 +73,7 @@ pub mod git_backend;
 pub mod global_actor;
 pub mod reducer;
 pub mod telemetry_handle;
+#[cfg(feature = "cloud")]
 pub mod telemetry_worker;
 pub mod test_sync;
 pub mod trace_normalizer;
@@ -3425,6 +3426,7 @@ struct ActorDaemonCoordinator {
     test_completion_log_dir: Option<PathBuf>,
     test_completion_log_lock: Mutex<()>,
     trace_ingest_tx: Mutex<Option<mpsc::Sender<Value>>>,
+    #[cfg(feature = "cloud")]
     telemetry_worker: Option<crate::daemon::telemetry_worker::DaemonTelemetryWorkerHandle>,
     next_trace_ingest_seq: AtomicUsize,
     next_carryover_snapshot_id: AtomicUsize,
@@ -3486,6 +3488,7 @@ impl ActorDaemonCoordinator {
                 }),
             test_completion_log_lock: Mutex::new(()),
             trace_ingest_tx: Mutex::new(None),
+            #[cfg(feature = "cloud")]
             telemetry_worker: None,
             next_trace_ingest_seq: AtomicUsize::new(0),
             next_carryover_snapshot_id: AtomicUsize::new(0),
@@ -6288,7 +6291,7 @@ impl ActorDaemonCoordinator {
                     "daemon strict rewrite synthesis failed command={:?} invoked={:?} sid={} error={}",
                     cmd.primary_command, cmd.invoked_command, cmd.root_sid, error
                 ));
-                crate::observability::log_error(
+                observability::log_error(
                     &error,
                     Some(json!({
                         "component": "daemon",
@@ -6528,15 +6531,19 @@ impl ActorDaemonCoordinator {
                         .map_err(GitAiError::from)
                 }),
             ControlRequest::SubmitTelemetry { envelopes } => {
+                #[cfg(feature = "cloud")]
                 if let Some(worker) = &self.telemetry_worker {
                     worker.submit_telemetry(envelopes).await;
                 }
+                let _ = envelopes;
                 Ok(ControlResponse::ok(None, None))
             }
             ControlRequest::SubmitCas { records } => {
+                #[cfg(feature = "cloud")]
                 if let Some(worker) = &self.telemetry_worker {
                     worker.submit_cas(records).await;
                 }
+                let _ = records;
                 Ok(ControlResponse::ok(None, None))
             }
             ControlRequest::WrapperPreState {
@@ -7055,14 +7062,17 @@ fn disable_trace2_for_daemon_process() {
 }
 
 /// How often the daemon wakes up to evaluate whether an update check is due.
+#[cfg(feature = "cloud")]
 const DAEMON_UPDATE_CHECK_INTERVAL_SECS: u64 = 3600;
 
 /// Maximum daemon uptime before a proactive restart (24.5 hours).
 /// Deliberately offset from the 24h update-check cadence so the uptime restart
 /// never races with an update-triggered shutdown.
+#[cfg(feature = "cloud")]
 const DAEMON_MAX_UPTIME_SECS: u64 = 24 * 3600 + 30 * 60;
 
 /// Returns the update check interval, respecting an env var override for testing.
+#[cfg(feature = "cloud")]
 fn daemon_update_check_interval() -> u64 {
     std::env::var("GIT_AI_DAEMON_UPDATE_CHECK_INTERVAL")
         .ok()
@@ -7071,6 +7081,7 @@ fn daemon_update_check_interval() -> u64 {
 }
 
 /// Returns the maximum uptime in nanoseconds, respecting an env var override for testing.
+#[cfg(feature = "cloud")]
 fn daemon_max_uptime_ns() -> u128 {
     let secs = std::env::var("GIT_AI_DAEMON_MAX_UPTIME_SECS")
         .ok()
@@ -7084,6 +7095,7 @@ fn daemon_max_uptime_ns() -> u128 {
 /// Sleeps in short increments so it can exit promptly when the coordinator
 /// signals shutdown.  When an update is detected, it requests a graceful
 /// shutdown so the daemon can self-update after draining in-flight work.
+#[cfg(feature = "cloud")]
 fn daemon_update_check_loop(coordinator: Arc<ActorDaemonCoordinator>, started_at_ns: u128) {
     use crate::commands::upgrade::{DaemonUpdateCheckResult, check_for_update_available};
 
@@ -7137,6 +7149,7 @@ fn daemon_update_check_loop(coordinator: Arc<ActorDaemonCoordinator>, started_at
 /// On Unix the installer atomically replaces the binary via `mv`; on Windows
 /// the installer is spawned as a detached process that polls until the exe is
 /// unlocked.
+#[cfg(feature = "cloud")]
 pub(crate) fn daemon_run_pending_self_update() {
     use crate::commands::upgrade::{
         DaemonUpdateCheckResult, check_and_install_update_if_available,
@@ -7173,11 +7186,16 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
     remove_socket_if_exists(&config.trace_socket_path)?;
     remove_socket_if_exists(&config.control_socket_path)?;
 
-    let mut coordinator_inner = ActorDaemonCoordinator::new();
+    let coordinator_inner = ActorDaemonCoordinator::new();
     // Spawn the telemetry worker inside the daemon's tokio runtime.
-    let telemetry_handle = crate::daemon::telemetry_worker::spawn_telemetry_worker();
-    crate::daemon::telemetry_worker::set_daemon_internal_telemetry(telemetry_handle.clone());
-    coordinator_inner.telemetry_worker = Some(telemetry_handle);
+    #[cfg(feature = "cloud")]
+    let coordinator_inner = {
+        let mut ci = coordinator_inner;
+        let telemetry_handle = crate::daemon::telemetry_worker::spawn_telemetry_worker();
+        crate::daemon::telemetry_worker::set_daemon_internal_telemetry(telemetry_handle.clone());
+        ci.telemetry_worker = Some(telemetry_handle);
+        ci
+    };
     let coordinator = Arc::new(coordinator_inner);
     coordinator.start_trace_ingest_worker()?;
     let rt_handle = tokio::runtime::Handle::current();
@@ -7223,11 +7241,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
         trace_shutdown_coord.request_shutdown();
     });
 
-    let started_at_ns = now_unix_nanos();
-    let update_coord = coordinator.clone();
-    let update_thread = std::thread::spawn(move || {
-        daemon_update_check_loop(update_coord, started_at_ns);
-    });
+    #[cfg(feature = "cloud")]
+    let update_thread = {
+        let started_at_ns = now_unix_nanos();
+        let update_coord = coordinator.clone();
+        std::thread::spawn(move || {
+            daemon_update_check_loop(update_coord, started_at_ns);
+        })
+    };
 
     coordinator.wait_for_shutdown().await;
 
@@ -7241,6 +7262,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
 
     let _ = control_thread.join();
     let _ = trace_thread.join();
+    #[cfg(feature = "cloud")]
     let _ = update_thread.join();
 
     remove_socket_if_exists(&config.trace_socket_path)?;

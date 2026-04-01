@@ -25,7 +25,7 @@ use crate::git::repository::{CommitRange, Repository, group_files_by_repository}
 use crate::git::sync_authorship::{NotesExistence, fetch_authorship_notes, push_authorship_notes};
 #[cfg(feature = "cloud")]
 use crate::observability::wrapper_performance_targets::log_performance_for_checkpoint;
-use crate::observability_shim::{log_message, spawn_background_flush};
+use crate::observability_shim::log_message;
 use crate::utils::is_interactive_terminal;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -1338,7 +1338,7 @@ fn log_daemon_checkpoint_delegate_failure(
         "repo_working_dir": repo_working_dir,
         "checkpoint_kind": checkpoint_kind_to_str(kind),
     });
-    observability::log_error(&error, Some(context));
+    crate::observability_shim::log_error(&error, Some(context));
 }
 
 fn daemon_checkpoint_delegate_enabled() -> bool {
