@@ -1,3 +1,6 @@
+// Some helpers and imports are only used by cloud-gated tests.
+#![allow(dead_code, unused_imports)]
+
 #[macro_use]
 #[path = "integration/repos/mod.rs"]
 mod repos;
@@ -145,6 +148,7 @@ impl Drop for ScopedEnvVar {
     }
 }
 
+#[cfg(feature = "cloud")]
 struct MockApiServer {
     base_url: String,
     received_cas: mpsc::Receiver<Value>,
@@ -152,6 +156,7 @@ struct MockApiServer {
     thread: Option<thread::JoinHandle<()>>,
 }
 
+#[cfg(feature = "cloud")]
 impl MockApiServer {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind mock API server");
@@ -196,6 +201,7 @@ impl MockApiServer {
     }
 }
 
+#[cfg(feature = "cloud")]
 impl Drop for MockApiServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -206,6 +212,7 @@ impl Drop for MockApiServer {
     }
 }
 
+#[cfg(feature = "cloud")]
 fn handle_http_connection(mut stream: TcpStream, tx: &mpsc::Sender<Value>) {
     let Some((path, body)) = read_http_request(&mut stream) else {
         return;
@@ -243,6 +250,7 @@ fn handle_http_connection(mut stream: TcpStream, tx: &mpsc::Sender<Value>) {
     write_http_response(&mut stream, response_body.as_bytes());
 }
 
+#[cfg(feature = "cloud")]
 fn read_http_request(stream: &mut TcpStream) -> Option<(String, Vec<u8>)> {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -788,6 +796,7 @@ fn claude_fixture_path() -> PathBuf {
         .join("example-claude-code.jsonl")
 }
 
+#[cfg(feature = "cloud")]
 fn assert_post_commit_uploads_prompt_cas(mode: GitTestMode) {
     let mock_api = MockApiServer::start();
     let _api_base_url = ScopedEnvVar::set("GIT_AI_API_BASE_URL", mock_api.base_url());
@@ -871,12 +880,14 @@ fn assert_post_commit_uploads_prompt_cas(mode: GitTestMode) {
 
 #[test]
 #[serial]
+#[cfg(feature = "cloud")]
 fn daemon_mode_post_commit_uploads_prompt_cas() {
     assert_post_commit_uploads_prompt_cas(GitTestMode::Daemon);
 }
 
 #[test]
 #[serial]
+#[cfg(feature = "cloud")]
 fn wrapper_daemon_mode_post_commit_uploads_prompt_cas() {
     assert_post_commit_uploads_prompt_cas(GitTestMode::WrapperDaemon);
 }
@@ -3920,6 +3931,7 @@ fn update_enabled_config_patch() -> String {
 /// pending update, request a graceful shutdown, and exit on its own.
 #[test]
 #[serial]
+#[cfg(feature = "cloud")]
 fn daemon_update_check_loop_detects_cached_update_and_shuts_down() {
     let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
 
