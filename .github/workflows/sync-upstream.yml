@@ -2,13 +2,8 @@ name: Sync upstream
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # Daily 06:00 UTC
+    - cron: '0 6 * * 1'   # Weekly Monday 06:00 UTC
   workflow_dispatch:
-
-# Note: SYNC_PAT (a PAT with repo + workflow scopes) is required because:
-#   1. GITHUB_TOKEN cannot push branches/commits that modify .github/workflows/ files
-#   2. Force-push to main requires a branch-protection bypass (configure in repo rulesets)
-# Without SYNC_PAT the workflow will detect changes but create an issue instead of pushing.
 
 permissions:
   contents: write
@@ -17,7 +12,7 @@ permissions:
 
 jobs:
   sync:
-    name: Rebase PageUp patches on upstream
+    name: Merge upstream into PageUp fork
     runs-on: ubuntu-latest
     steps:
 
@@ -26,7 +21,6 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          # Use PAT so pushes can include workflow-file changes
           token: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Fetch upstream
@@ -46,9 +40,7 @@ jobs:
             echo "up_to_date=false" >> "$GITHUB_OUTPUT"
             COUNT=$(git rev-list "$MERGE_BASE".."upstream/main" --count)
             echo "commit_count=$COUNT" >> "$GITHUB_OUTPUT"
-            PATCH_COUNT=$(git rev-list "$MERGE_BASE"..HEAD --count)
-            echo "patch_count=$PATCH_COUNT" >> "$GITHUB_OUTPUT"
-            echo "::notice::$COUNT new upstream commits. $PATCH_COUNT PageUp patches to rebase."
+            echo "::notice::$COUNT new upstream commits to merge."
           fi
 
       - name: Collect upstream commit log
@@ -57,11 +49,9 @@ jobs:
         run: |
           MERGE_BASE=$(git merge-base HEAD upstream/main)
 
-          # Write log to a file — avoids GITHUB_OUTPUT size limits and shell quoting issues
           git log --oneline --no-merges "$MERGE_BASE"..upstream/main \
             | sed 's/^/- /' > /tmp/upstream-commits.md
 
-          # Also store in output for the job summary (plain text, no backticks)
           {
             echo 'log<<EOF'
             cat /tmp/upstream-commits.md
@@ -72,38 +62,93 @@ jobs:
             | grep -ciE 'security|cve|vuln|advisory|exploit|credential' || true)
           echo "security_hits=$SECURITY_HITS" >> "$GITHUB_OUTPUT"
 
-      - name: Rebase PageUp patches on upstream
+      - name: Merge upstream with auto-resolution
         if: steps.check.outputs.up_to_date == 'false'
-        id: rebase
+        id: merge
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git rebase upstream/main; then
+
+          # Attempt the merge
+          if git merge upstream/main --no-edit --no-commit 2>/dev/null; then
+            # Clean merge — just need to patch the version
+            UPSTREAM_VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2)
+            if [[ "$UPSTREAM_VERSION" != *-pageup ]]; then
+              sed -i "s/^version = \"$UPSTREAM_VERSION\"/version = \"$UPSTREAM_VERSION-pageup\"/" Cargo.toml
+              # Patch Cargo.lock to match
+              if grep -q "^version = \"$UPSTREAM_VERSION\"" Cargo.lock; then
+                sed -i "0,/^version = \"$UPSTREAM_VERSION\"/s//version = \"$UPSTREAM_VERSION-pageup\"/" Cargo.lock
+              fi
+              git add Cargo.toml Cargo.lock
+            fi
+            git commit -m "Merge upstream/main into PageUp fork (v${UPSTREAM_VERSION}-pageup)"
             echo "result=success" >> "$GITHUB_OUTPUT"
+            echo "version=$UPSTREAM_VERSION" >> "$GITHUB_OUTPUT"
           else
-            git rebase --abort
-            echo "result=conflict" >> "$GITHUB_OUTPUT"
+            # Merge had conflicts — try auto-resolving known ones
+            CONFLICTED=$(git diff --name-only --diff-filter=U)
+            UNRESOLVABLE=""
+
+            for file in $CONFLICTED; do
+              case "$file" in
+                Cargo.toml)
+                  # Take upstream, then patch version suffix
+                  git checkout --theirs Cargo.toml
+                  UPSTREAM_VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2)
+                  sed -i "s/^version = \"$UPSTREAM_VERSION\"/version = \"$UPSTREAM_VERSION-pageup\"/" Cargo.toml
+                  git add Cargo.toml
+                  echo "version=$UPSTREAM_VERSION" >> "$GITHUB_OUTPUT"
+                  ;;
+                Cargo.lock)
+                  # Take upstream, patch version to match
+                  git checkout --theirs Cargo.lock
+                  if [ -n "$UPSTREAM_VERSION" ] && grep -q "^version = \"$UPSTREAM_VERSION\"" Cargo.lock; then
+                    sed -i "0,/^version = \"$UPSTREAM_VERSION\"/s//version = \"$UPSTREAM_VERSION-pageup\"/" Cargo.lock
+                  fi
+                  git add Cargo.lock
+                  ;;
+                .github/dependabot.yml)
+                  # Always take upstream's dependabot config
+                  git checkout --theirs .github/dependabot.yml
+                  git add .github/dependabot.yml
+                  ;;
+                *)
+                  UNRESOLVABLE="$UNRESOLVABLE $file"
+                  ;;
+              esac
+            done
+
+            if [ -z "$UNRESOLVABLE" ]; then
+              # All conflicts resolved
+              UPSTREAM_VERSION=${UPSTREAM_VERSION:-$(grep '^version = ' Cargo.toml | cut -d'"' -f2 | sed 's/-pageup//')}
+              git commit -m "Merge upstream/main into PageUp fork (v${UPSTREAM_VERSION}-pageup)"
+              echo "result=success" >> "$GITHUB_OUTPUT"
+            else
+              git merge --abort
+              echo "result=conflict" >> "$GITHUB_OUTPUT"
+              echo "unresolvable=$UNRESOLVABLE" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
-      - name: Push rebased main
-        if: steps.rebase.outputs.result == 'success'
+      - name: Push merged main
+        if: steps.merge.outputs.result == 'success'
         id: push
         run: |
-          if git push --force-with-lease origin main 2>&1; then
+          if git push origin main 2>&1; then
             echo "pushed=true" >> "$GITHUB_OUTPUT"
           else
             echo "pushed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Force-push failed — likely missing SYNC_PAT or branch-protection bypass."
+            echo "::warning::Push failed — likely missing SYNC_PAT or branch protection."
           fi
 
       - name: Create escalation PR on conflict
-        if: steps.rebase.outputs.result == 'conflict'
+        if: steps.merge.outputs.result == 'conflict'
         id: escalation_pr
         env:
           GH_TOKEN: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
           COMMIT_COUNT: ${{ steps.check.outputs.commit_count }}
-          PATCH_COUNT: ${{ steps.check.outputs.patch_count }}
           SECURITY_HITS: ${{ steps.commits.outputs.security_hits }}
+          UNRESOLVABLE: ${{ steps.merge.outputs.unresolvable }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           BRANCH="auto/upstream-sync-$(date +%Y%m%d)"
@@ -111,17 +156,19 @@ jobs:
 
           if ! git push -u origin "$BRANCH" 2>&1; then
             echo "branch_pushed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Could not push escalation branch (SYNC_PAT may be missing)."
+            echo "::warning::Could not push escalation branch."
             exit 0
           fi
           echo "branch_pushed=true" >> "$GITHUB_OUTPUT"
 
-          # Build PR body in a temp file to avoid shell expansion issues
           {
-            echo "## Upstream sync failed — rebase conflict"
+            echo "## Upstream sync — manual merge required"
             echo ""
-            echo "**${COMMIT_COUNT}** new upstream commits could not be rebased"
-            echo "under the **${PATCH_COUNT}** PageUp patches."
+            echo "**${COMMIT_COUNT}** new upstream commits could not be auto-merged."
+            echo ""
+            echo "### Conflicting files (not auto-resolvable)"
+            echo ""
+            for f in $UNRESOLVABLE; do echo "- \`$f\`"; done
             if [ "$SECURITY_HITS" != "0" ]; then
               echo ""
               echo "### Security-relevant changes detected"
@@ -138,13 +185,12 @@ jobs:
             echo '```bash'
             echo "git fetch upstream main"
             echo "git checkout main"
-            echo "git rebase upstream/main"
+            echo "git merge upstream/main"
             echo "# resolve conflicts, then:"
-            echo "git rebase --continue"
-            echo "git push --force-with-lease origin main"
+            echo "git add ."
+            echo 'git commit -m "Merge upstream/main into PageUp fork"'
+            echo "git push origin main"
             echo '```'
-            echo ""
-            echo "Then close this PR (do **not** merge it via GitHub UI)."
             echo ""
             echo "---"
             echo "*Created by [sync-upstream](${RUN_URL})*"
@@ -154,45 +200,32 @@ jobs:
             --base main \
             --head "$BRANCH" \
             --label upstream-sync \
-            --title "chore: upstream sync conflict — manual rebase required" \
+            --title "chore: upstream sync conflict — manual merge required" \
             --body-file /tmp/pr-body.md || true
 
       - name: Create issue as fallback notification
         if: |
           (steps.push.outputs.pushed == 'false') ||
-          (steps.rebase.outputs.result == 'conflict' && steps.escalation_pr.outputs.branch_pushed == 'false')
+          (steps.merge.outputs.result == 'conflict' && steps.escalation_pr.outputs.branch_pushed == 'false')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REBASE_RESULT: ${{ steps.rebase.outputs.result }}
+          MERGE_RESULT: ${{ steps.merge.outputs.result }}
           COMMIT_COUNT: ${{ steps.check.outputs.commit_count }}
-          PATCH_COUNT: ${{ steps.check.outputs.patch_count }}
+          UNRESOLVABLE: ${{ steps.merge.outputs.unresolvable }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [ "$REBASE_RESULT" = "success" ]; then
-            TITLE="chore: upstream sync — rebase succeeded but push failed"
+          if [ "$MERGE_RESULT" = "success" ]; then
+            TITLE="chore: upstream sync — merge succeeded but push failed"
             {
-              echo "## Upstream sync rebase succeeded but could not push"
+              echo "## Upstream sync merge succeeded but could not push"
               echo ""
-              echo "The rebase of **${PATCH_COUNT}** PageUp patches on"
-              echo "**${COMMIT_COUNT}** new upstream commits succeeded,"
-              echo "but the force-push to \`main\` failed."
-              echo ""
-              echo "**Most likely cause:** missing \`SYNC_PAT\` secret or branch-protection bypass."
+              echo "**Most likely cause:** missing \`SYNC_PAT\` secret or branch protection."
               echo ""
               echo "### Setup required"
               echo ""
               echo "1. Create a PAT with \`repo\` + \`workflow\` scopes"
               echo "2. Add it as repo secret \`SYNC_PAT\`"
               echo "3. Add a branch-protection bypass for the PAT owner (Settings > Rules > Rulesets)"
-              echo ""
-              echo "### Manual sync"
-              echo ""
-              echo '```bash'
-              echo "git fetch upstream main"
-              echo "git checkout main"
-              echo "git rebase upstream/main"
-              echo "git push --force-with-lease origin main"
-              echo '```'
               echo ""
               echo "### Upstream commits"
               echo ""
@@ -202,25 +235,28 @@ jobs:
               echo "*Created by [sync-upstream](${RUN_URL})*"
             } > /tmp/issue-body.md
           else
-            TITLE="chore: upstream sync conflict — manual rebase required"
+            TITLE="chore: upstream sync conflict — manual merge required"
             {
-              echo "## Upstream sync failed — rebase conflict"
+              echo "## Upstream sync failed — merge conflict"
               echo ""
-              echo "**${COMMIT_COUNT}** new upstream commits could not be rebased"
-              echo "under the **${PATCH_COUNT}** PageUp patches."
+              echo "**${COMMIT_COUNT}** upstream commits have conflicts that could not be auto-resolved."
               echo ""
-              echo "Could not create a PR because pushing the escalation branch failed"
-              echo "(missing \`SYNC_PAT\` secret — the \`GITHUB_TOKEN\` cannot push workflow file changes)."
+              echo "### Conflicting files"
+              echo ""
+              for f in $UNRESOLVABLE; do echo "- \`$f\`"; done
+              echo ""
+              echo "Could not create a PR (missing \`SYNC_PAT\`)."
               echo ""
               echo "### How to resolve"
               echo ""
               echo '```bash'
               echo "git fetch upstream main"
               echo "git checkout main"
-              echo "git rebase upstream/main"
+              echo "git merge upstream/main"
               echo "# resolve conflicts, then:"
-              echo "git rebase --continue"
-              echo "git push --force-with-lease origin main"
+              echo "git add ."
+              echo 'git commit -m "Merge upstream/main into PageUp fork"'
+              echo "git push origin main"
               echo '```'
               echo ""
               echo "### Upstream commits"
@@ -240,18 +276,18 @@ jobs:
       - name: Job summary
         if: always() && steps.check.outputs.up_to_date == 'false'
         env:
-          REBASE_RESULT: ${{ steps.rebase.outputs.result }}
+          MERGE_RESULT: ${{ steps.merge.outputs.result }}
           PUSH_RESULT: ${{ steps.push.outputs.pushed }}
           COMMIT_COUNT: ${{ steps.check.outputs.commit_count }}
-          PATCH_COUNT: ${{ steps.check.outputs.patch_count }}
           SECURITY_HITS: ${{ steps.commits.outputs.security_hits }}
+          VERSION: ${{ steps.merge.outputs.version }}
         run: |
-          if [ "$REBASE_RESULT" = "success" ] && [ "$PUSH_RESULT" = "true" ]; then
-            echo "### Rebased ${PATCH_COUNT} PageUp patches on ${COMMIT_COUNT} new upstream commits" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$REBASE_RESULT" = "success" ] && [ "$PUSH_RESULT" = "false" ]; then
-            echo "### Rebase succeeded but push failed — issue created" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$REBASE_RESULT" = "conflict" ]; then
-            echo "### Rebase conflict — escalation PR/issue created" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$MERGE_RESULT" = "success" ] && [ "$PUSH_RESULT" = "true" ]; then
+            echo "### Merged ${COMMIT_COUNT} upstream commits (v${VERSION}-pageup)" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$MERGE_RESULT" = "success" ] && [ "$PUSH_RESULT" = "false" ]; then
+            echo "### Merge succeeded but push failed — issue created" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$MERGE_RESULT" = "conflict" ]; then
+            echo "### Merge conflict — escalation PR/issue created" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "$SECURITY_HITS" != "0" ] && [ -n "$SECURITY_HITS" ]; then
             echo "**${SECURITY_HITS} security-relevant commit(s)**" >> "$GITHUB_STEP_SUMMARY"
